@@ -4,3 +4,4 @@ psycopg2-binary
 Flask-WTF==1.1.1
 Werkzeug==2.2.3
 python-dotenv
+gunicorn
