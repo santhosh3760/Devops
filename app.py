@@ -7,6 +7,7 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 
+from flask_session import Session
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -20,17 +21,28 @@ if not app.config['SECRET_KEY']:
     raise ValueError("No SECRET_KEY set for Flask application. Set it as an environment variable.")
 
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/signup')
+# # Modify session settings for development
+
+
+# Add this to your config
+app.config['SESSION_TYPE'] = 'filesystem'
+Session(app)
+
+
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-
-app.config['SESSION_COOKIE_SECURE'] = True  # Ensures cookies are only sent over HTTPS
+if not app.config.get('PRODUCTION', False):
+    app.config['SESSION_COOKIE_SECURE'] = False  # Allow cookies over HTTP during development
+# app.config['SESSION_COOKIE_SECURE'] = True  # Ensures cookies are only sent over HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True  # Prevents JavaScript from accessing cookies
 app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'  # Limits cookie sharing between sites
 
 # Initialize extensions
 db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
+
+
 
 # Model
 class User(db.Model):
@@ -44,9 +56,16 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-# Routes
+# # Routes
+# @app.route('/')
+# def home():
+#     return render_template('login.html')
+
 @app.route('/')
 def home():
+    # If user is already logged in, redirect to dashboard
+    if 'user_id' in session:
+        return redirect(url_for('dashboard'))
     return render_template('login.html')
 
 @app.route('/signup', methods=['GET', 'POST'])
@@ -81,8 +100,14 @@ def signup():
             
     return render_template('signup.html')
 
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    # If user is already logged in, redirect to dashboard
+    if 'user_id' in session:
+        return redirect(url_for('dashboard'))
+        
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -90,6 +115,9 @@ def login():
         user = User.query.filter_by(username=username).first()
         
         if user and user.check_password(password):
+            # Clear the session first
+            session.clear()
+            # Set user_id in session
             session['user_id'] = user.id
             flash(f'Welcome {username}!')
             return redirect(url_for('dashboard'))
@@ -100,13 +128,21 @@ def login():
 
 @app.route('/dashboard')
 def dashboard():
+    # Print session data to debug
+    print(f"Dashboard accessed. Session data: {session}")
+    
     if 'user_id' not in session:
         flash('Please log in first')
-        return redirect(url_for('home'))
+        return redirect(url_for('login'))
         
     user = User.query.get(session['user_id'])
+    
+    if not user:
+        session.pop('user_id', None)
+        flash('Session expired. Please log in again')
+        return redirect(url_for('login'))
+    
     return render_template('dashboard.html', username=user.username)
-
 @app.route('/logout')
 def logout():
     session.pop('user_id', None)
@@ -114,11 +150,11 @@ def logout():
     return redirect(url_for('home'))
 
 
-# # Set up logging
-# if not app.debug:
-#     handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=3)
-#     handler.setLevel(logging.INFO)
-#     app.logger.addHandler(handler)
+# Set up logging
+if not app.debug:
+    handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=3)
+    handler.setLevel(logging.INFO)
+    app.logger.addHandler(handler)
 
 @app.errorhandler(500)
 def internal_error(error):
